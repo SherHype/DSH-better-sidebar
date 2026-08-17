@@ -177,6 +177,11 @@ export async function commit(cwd: string, message: string): Promise<void> {
   await runGit(cwd, ['commit', '-m', message])
 }
 
+/** Push local commits to the configured remote (longer timeout for uploads). */
+export async function push(cwd: string): Promise<void> {
+  await runGit(cwd, ['push'], 120_000)
+}
+
 /** Branch names (current first). */
 export async function branches(cwd: string): Promise<{ current: string; names: string[] }> {
   const [current, raw] = await Promise.all([

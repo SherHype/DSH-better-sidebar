@@ -94,6 +94,8 @@ export function GitView(props: {
   const [commitMsg, setCommitMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [commitError, setCommitError] = useState<string | null>(null)
+  /** Commit+push result notice: green on push success, warning otherwise. */
+  const [commitNotice, setCommitNotice] = useState<string | null>(null)
   /** Whether the history was fully paged (a batch shorter than LOG_BATCH). */
   const [logEnded, setLogEnded] = useState(false)
   const [logLoadingMore, setLogLoadingMore] = useState(false)
@@ -190,10 +192,13 @@ export function GitView(props: {
     if (message === '' || busy) return
     setBusy(true)
     setCommitError(null)
+    setCommitNotice(null)
     try {
-      await api.gitCommit(scope, message)
+      const result = await api.gitCommit(scope, message)
       setCommitMsg('')
       await refresh()
+      if (result.pushed) setCommitNotice(t('commitPushed'))
+      else setCommitNotice(`${t('commitLocalOnly')}${result.pushError ?? ''}`)
     } catch (reason) {
       setCommitError(reason instanceof Error ? reason.message : String(reason))
     } finally {
@@ -355,6 +360,7 @@ export function GitView(props: {
             </button>
           </div>
           {commitError !== null && <div className={css.gitError}>{commitError}</div>}
+          {commitNotice !== null && <div className={css.gitNotice}>{commitNotice}</div>}
 
           <div className={css.gitSection}>
             <div className={css.gitSectionHeader}><span>{t('history')}</span></div>

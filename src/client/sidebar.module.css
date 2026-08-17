@@ -1522,6 +1522,14 @@
   white-space: pre-wrap;
 }
 
+/* Commit + push result notice (green success / amber partial failure). */
+.gitNotice {
+  padding: 4px 12px 8px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-state-success-primary);
+  white-space: pre-wrap;
+}
+
 .gitDiff {
   border-top: 1px solid var(--dsw-alias-border-l1);
   padding: 8px;

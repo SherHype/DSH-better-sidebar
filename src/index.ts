@@ -250,14 +250,14 @@ function buildApi(
     'git.stage': async (payload) => {
       const { cwd } = cwdOf(payload)
       const record = payload as { path?: unknown }
-      const path = record.path === undefined ? undefined : requireString(payload, 'path')
+      const path = record.path === undefined ? undefined : await resolveGitPath(cwd, requireString(payload, 'path'))
       await git.stage(cwd, path)
       return { ok: true }
     },
     'git.unstage': async (payload) => {
       const { cwd } = cwdOf(payload)
       const record = payload as { path?: unknown }
-      const path = record.path === undefined ? undefined : requireString(payload, 'path')
+      const path = record.path === undefined ? undefined : await resolveGitPath(cwd, requireString(payload, 'path'))
       await git.unstage(cwd, path)
       return { ok: true }
     },
@@ -265,7 +265,19 @@ function buildApi(
       const { cwd } = cwdOf(payload)
       const message = requireString(payload, 'message')
       await git.commit(cwd, message)
-      return { ok: true }
+      // Commit is always saved locally; push is best-effort so a network or
+      // auth failure never loses the user's commit. The client shows a green
+      // notice on push success and a warning with the error when the push
+      // did not go through.
+      let pushed = false
+      let pushError: string | null = null
+      try {
+        await git.push(cwd)
+        pushed = true
+      } catch (reason) {
+        pushError = reason instanceof Error ? reason.message : String(reason)
+      }
+      return { ok: true, pushed, ...(pushError !== null ? { pushError } : {}) }
     },
     'git.branch': async (payload) => {
       const { cwd } = cwdOf(payload)
