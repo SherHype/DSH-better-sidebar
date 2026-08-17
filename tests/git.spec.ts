@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseUnifiedDiff } from '../src/client/DiffView.tsx'
-import { parseLogLines, parsePorcelainZ } from '../src/git.ts'
+import { filterStatusToCwd, parseLogLines, parsePorcelainZ } from '../src/git.ts'
 
 describe('git parsing', () => {
   it('parses porcelain -z entries including renames', () => {
@@ -132,5 +132,31 @@ describe('git parsing', () => {
   it('parses an empty or junk diff into no files', () => {
     expect(parseUnifiedDiff('').files).toEqual([])
     expect(parseUnifiedDiff('no diff here\n').files).toEqual([])
+  })
+
+  it('keeps status entries under the session cwd only', () => {
+    const entries = [
+      { path: 'sub/src/a.ts', xy: ' M' },
+      { path: 'sub/src/deep/b.ts', xy: ' M' },
+      { path: 'docs/readme.md', xy: '??' },
+      { path: 'sub/src/renamed.ts', xy: 'R ' },
+    ]
+    expect(filterStatusToCwd('/repo/sub', '/repo', entries)).toEqual([
+      { path: 'sub/src/a.ts', xy: ' M' },
+      { path: 'sub/src/deep/b.ts', xy: ' M' },
+      { path: 'sub/src/renamed.ts', xy: 'R ' },
+    ])
+  })
+
+  it('keeps a path equal to the cwd-relative prefix itself', () => {
+    // git can report a directory entry (submodule / mode change); it must not
+    // be dropped just because the prefix check compares against `rel/`.
+    const entries = [{ path: 'sub', xy: ' M' }, { path: 'sub/file.txt', xy: ' M' }]
+    expect(filterStatusToCwd('/repo/sub', '/repo', entries)).toHaveLength(2)
+  })
+
+  it('keeps every entry when the cwd is the repository top', () => {
+    const entries = [{ path: 'a.ts', xy: ' M' }, { path: 'b.ts', xy: '??' }]
+    expect(filterStatusToCwd('/repo', '/repo/', entries)).toEqual(entries)
   })
 })

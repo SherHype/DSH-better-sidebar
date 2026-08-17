@@ -10,6 +10,7 @@
  * user.name/user.email).
  */
 import { spawn } from 'node:child_process'
+import { relative as relativePath, sep } from 'node:path'
 
 /** A parsed `git status --porcelain=v1 -z` entry. */
 export interface GitStatusEntry {
@@ -143,15 +144,40 @@ export async function currentBranch(cwd: string): Promise<string> {
   return out.trim()
 }
 
-/** Working-tree status (untracked included). */
+/** Working-tree status (untracked included), scoped to the session cwd. */
 export async function status(cwd: string): Promise<GitStatusResult> {
   const repo = await isGitRepo(cwd)
   if (!repo) return { isRepo: false, entries: [] }
-  const [branch, raw] = await Promise.all([
+  const [branch, raw, root] = await Promise.all([
     currentBranch(cwd).catch(() => 'HEAD'),
     runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=normal']),
+    repoRoot(cwd).catch(() => cwd),
   ])
-  return { isRepo: true, branch, entries: parsePorcelainZ(raw) }
+  return { isRepo: true, branch, entries: filterStatusToCwd(cwd, root, parsePorcelainZ(raw)) }
+}
+
+/**
+ * Keep only status entries that live under the session working directory, so
+ * the source-control panel of a session inside a larger repository shows the
+ * workspace's OWN changes instead of the whole repo (staged, unstaged and
+ * untracked alike — the panel cannot meaningfully operate on files the
+ * session cannot reach). Porcelain paths are repo-top-relative with POSIX
+ * separators; entries are kept when their normalized path starts with the
+ * normalized cwd-relative prefix. A cwd at the repository top (or outside
+ * it) is never filtered.
+ */
+export function filterStatusToCwd(cwd: string, repoTop: string, entries: GitStatusEntry[]): GitStatusEntry[] {
+  const fold = (value: string): string => process.platform === 'win32' ? value.toLowerCase() : value
+  const normalizedTop = repoTop.replace(/[\\/]+$/, '')
+  const normalizedCwd = cwd.replace(/[\\/]+$/, '')
+  if (fold(normalizedCwd) === fold(normalizedTop)) return entries
+  const rel = relativePath(normalizedTop, normalizedCwd).split(sep).join('/')
+  if (rel === '' || rel === '.' || rel.startsWith('..')) return entries
+  const prefix = `${rel}/`
+  return entries.filter(entry => {
+    const path = fold(entry.path.replace(/\\/g, '/'))
+    return path === rel || path.startsWith(prefix)
+  })
 }
 
 /** Diff text of the worktree (unstaged) or the index (staged). */
