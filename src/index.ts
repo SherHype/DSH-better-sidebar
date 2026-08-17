@@ -45,7 +45,7 @@ import {
 } from './pty-deps.ts'
 import { registerTools } from './tools.ts'
 import { buildJobsApi, type SidebarJobsRoutes } from './jobs-routes.ts'
-import { readJsonBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
+import { readJsonBody, readRawBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
 
 export { Config }
 export type { SidebarConfig, ResolvedSidebarConfig }
@@ -236,6 +236,30 @@ function buildApi(
         throw new SidebarError('fs-error', `cannot write "${path}": ${error instanceof Error ? error.message : String(error)}`, 400)
       }
       return { ok: true }
+    },
+    'fs.delete': async (payload) => {
+      const { cwd } = cwdOf(payload)
+      const path = requireAbsolute(requireString(payload, 'path'))
+      // Never allow the session working directory itself to be deleted: the
+      // explorer is rooted there, so removing it would strand the session.
+      if (path === cwd) {
+        throw new SidebarError('fs-error', 'cannot delete the session working directory', 403)
+      }
+      let info
+      try {
+        info = await stat(path)
+      } catch (error) {
+        throw new SidebarError('fs-error', `cannot delete "${path}": ${error instanceof Error ? error.message : String(error)}`, 404)
+      }
+      // Directories need explicit recursion (the client confirms first); files
+      // (and symlinks — rm never follows the link target) always delete.
+      const recursive = info.isDirectory() && (payload as { recursive?: unknown } | null)?.recursive === true
+      try {
+        await rm(path, { recursive, force: false })
+      } catch (error) {
+        throw new SidebarError('fs-error', `cannot delete "${path}": ${error instanceof Error ? error.message : String(error)}`, 400)
+      }
+      return { ok: true, path }
     },
     'git.status': async (payload) => {
       const { cwd } = cwdOf(payload)
@@ -572,6 +596,73 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
       }
     },
   }), 'dsh-better-sidebar: /sidebar/api routes')
+
+  // ── Upload route (raw file bytes) ───────────────────────────────────────
+  // Companion to the JSON API: the JSON body cap (1MB, see wire.ts) is far
+  // below a reasonable file size, so uploads stream straight to disk through
+  // a dedicated non-JSON POST. The destination is the full absolute path
+  // (URL-encoded in the query; the client computes `<dir>/<file name>` so
+  // the tree refresh can show the new row immediately). The body is the
+  // file's raw bytes — the MIME header is ignored. Written atomically:
+  // stream into a temp file in the destination directory, then rename.
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: '/sidebar/upload',
+    handler: async (req, res) => {
+      if (!fence(req)) {
+        writeJson(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } })
+        return
+      }
+      if (req.method !== 'POST') {
+        writeJson(res, 405, { ok: false, error: { code: 'method-error', message: 'method not allowed' } })
+        return
+      }
+      try {
+        const url = new URL(req.url ?? '/', 'http://dsh.internal')
+        const sessionId = url.searchParams.get('sessionId')
+        const raw = url.searchParams.get('path')
+        if (sessionId === null || raw === null) {
+          throw new SidebarError('bad-request', 'sessionId and path are required')
+        }
+        // Resolve the session cwd (validates it and keeps the session header
+        // semantics consistent with every other /sidebar route).
+        sessionCwdOf(ctx, sessionId, url.searchParams.get('cwd') ?? undefined)
+        const path = requireAbsolute(raw)
+        const tmp = `${path}.dsh-sidebar-tmp-${process.pid}`
+        let total = 0
+        try {
+          await mkdir(dirname(path), { recursive: true })
+          const target = await open(tmp, 'w')
+          try {
+            for await (const chunk of req) {
+              const buffer = Buffer.from(chunk)
+              total += buffer.length
+              if (total > resolved.uploadLimit) {
+                throw new SidebarError('bad-request', `upload exceeds the size limit (${resolved.uploadLimit} bytes)`, 413)
+              }
+              await target.write(buffer)
+            }
+            await target.sync()
+          } finally {
+            await target.close()
+          }
+          // Reject destinations that already exist as directories (the rename
+          // would otherwise replace the directory with the uploaded file).
+          const existing = await stat(path).catch(() => undefined)
+          if (existing?.isDirectory()) {
+            throw new SidebarError('fs-error', 'cannot upload onto a directory', 400)
+          }
+          await rename(tmp, path)
+          writeOk(res, { path, size: total })
+        } catch (error) {
+          await rm(tmp, { force: true }).catch(() => {})
+          throw error
+        }
+      } catch (error) {
+        writeError(res, error)
+      }
+    },
+  }), 'dsh-better-sidebar: /sidebar/upload route')
 
   // ── Lazy chunk route (client bundle splits) ─────────────────────────────
   // Serves the client half's split bundles (lib/client-<name>.js) so the

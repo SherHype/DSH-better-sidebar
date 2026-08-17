@@ -41,6 +41,25 @@ export interface SidebarOk<T> { ok: true; value: T }
 /** Failure envelope of one API method. */
 export interface SidebarErr { ok: false; error: { code: SidebarErrorCode; message: string } }
 
+/**
+ * Read the raw request body as a Buffer, bounded by `limit` bytes (the
+ * upload route streams file bytes directly — no JSON envelope — so the
+ * 1MB JSON cap does not apply; the caller supplies the upload limit).
+ */
+export async function readRawBody(req: SidebarHttpRequest, limit: number): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of req) {
+    const buffer = Buffer.from(chunk)
+    total += buffer.length
+    if (total > limit) {
+      throw new SidebarError('bad-request', `upload exceeds the size limit (${limit} bytes)`, 413)
+    }
+    chunks.push(buffer)
+  }
+  return Buffer.concat(chunks)
+}
+
 /** Read and parse the JSON request body (bounded; malformed → bad-request). */
 export async function readJsonBody(req: SidebarHttpRequest): Promise<unknown> {
   const chunks: Buffer[] = []

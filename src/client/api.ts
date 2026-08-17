@@ -106,11 +106,16 @@ async function call<T>(method: string, payload: Record<string, unknown>, signal?
   } catch (error) {
     throw new SidebarApiError('network', error instanceof Error ? error.message : String(error))
   }
+  return parseEnvelope<T>(response, 'http')
+}
+
+/** Parse the shared `{ok, value}` / `{ok: false, error}` wire envelope. */
+async function parseEnvelope<T>(response: Response, fallbackCode: string): Promise<T> {
   const parsed: { ok?: boolean; value?: unknown; error?: { code?: string; message?: string } } | null
     = await response.json().catch(() => null)
   if (!response.ok || parsed === null || parsed.ok !== true || parsed.value === undefined) {
     throw new SidebarApiError(
-      parsed?.error?.code ?? 'http',
+      parsed?.error?.code ?? fallbackCode,
       parsed?.error?.message ?? `HTTP ${response.status}`,
     )
   }
@@ -139,6 +144,11 @@ export const api = {
     call<FsTextResult | FsBinaryResult>('fs.read', scopePayload(scope, { path }), signal),
   fsWrite: (scope: SessionScope, path: string, content: string) =>
     call<{ ok: true }>('fs.write', scopePayload(scope, { path, content })),
+  /** Delete a file or directory (recursive for directories; the client
+   *  confirms first). The host refuses to delete the session's own working
+   *  directory. */
+  fsDelete: (scope: SessionScope, path: string) =>
+    call<{ ok: true; path: string }>('fs.delete', scopePayload(scope, { path, recursive: true })),
   gitStatus: (scope: SessionScope, signal?: AbortSignal) =>
     call<GitStatusResult>('git.status', scopePayload(scope, {}), signal),
   gitDiff: (scope: SessionScope, path: string | undefined, staged: boolean, signal?: AbortSignal) =>
@@ -215,6 +225,39 @@ export const api = {
 /** Absolute URL of the media route for one path (images only). */
 export function mediaUrl(scope: SessionScope, path: string): string {
   return fileUrl(scope, path, false)
+}
+
+/**
+ * Join a directory and a file name for an upload destination. Mirror of the
+ * host's path join: the destination must stay absolute, and the host's
+ * `requireAbsolute` normalizes whichever separator style lands on the wire.
+ */
+function joinPath(dir: string, name: string): string {
+  return `${dir.replace(/[\\/]+$/, '')}/${name}`
+}
+
+/**
+ * Upload one browser File into a directory of the session workspace. The
+ * raw bytes POST to the dedicated /sidebar/upload route — the JSON API body
+ * cap (1MB) is far below real file sizes, so this is hand-rolled instead of
+ * going through the JSON `call` wrapper. Returns the stored absolute path.
+ */
+export function uploadFile(scope: SessionScope, dir: string, file: File, signal?: AbortSignal): Promise<{ path: string; size: number }> {
+  const params = new URLSearchParams({ sessionId: scope.sessionId, path: joinPath(dir, file.name) })
+  if (scope.cwd !== undefined && scope.cwd !== '') params.set('cwd', scope.cwd)
+  return (async () => {
+    let response: Response
+    try {
+      response = await fetch(`/sidebar/upload?${params.toString()}`, {
+        method: 'POST',
+        body: file,
+        signal,
+      })
+    } catch (error) {
+      throw new SidebarApiError('network', error instanceof Error ? error.message : String(error))
+    }
+    return parseEnvelope<{ path: string; size: number }>(response, 'http')
+  })()
 }
 
 /** Absolute URL of the download route: serves raw bytes (binary-safe) with
