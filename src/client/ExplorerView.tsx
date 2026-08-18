@@ -18,8 +18,9 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
-  Button, IconCloseOutline16, IconCodeOutline16, IconCopyOutline16, IconDownloadOutline16, IconFolderClose16, IconFolderOpen16,
-  IconLinkOutline16, IconRefreshOutline16, IconTrashOutline16, Menu, Modal, writeClipboard,
+  Button, IconCloseOutline16, IconCodeOutline16, IconCopyOutline16, IconDownloadOutline16, IconEditOutline16,
+  IconFolderClose16, IconFolderOpen16, IconLinkOutline16, IconRefreshOutline16, IconTrashOutline16, Menu, Modal,
+  writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { api, downloadUrl, uploadFile, type FsEntry } from './api.ts'
 import { IconUploadOutline16 } from './icons.tsx'
@@ -93,10 +94,17 @@ export function ExplorerView(props: {
   const [confirm, setConfirm] = useState<ConfirmState | null>(null)
   /** Upload in flight (buttons disabled; the tree refreshes at the end). */
   const [uploading, setUploading] = useState(false)
-  /** Transient action banner (upload / delete failure) above the tree. */
+  /** Transient action banner (upload / delete / rename failure) above the tree. */
   const [banner, setBanner] = useState<string | null>(null)
   /** A file drag is hovering the explorer (drop-to-upload target mark). */
   const [dragOver, setDragOver] = useState(false)
+  /** The row being renamed inline (its path, to render the input in place). */
+  const [renaming, setRenaming] = useState<{ path: string } | null>(null)
+  /** Live value of the inline rename input. */
+  const [renameValue, setRenameValue] = useState('')
+  /** Completing the rename (Enter/blur) must be processed exactly once. */
+  const renameDoneRef = useRef(false)
+  const renameInputRef = useRef<HTMLInputElement>(null)
   /** The explorer root element (drag interception) and the tree body (drop styling). */
   const rootRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -165,6 +173,37 @@ export function ExplorerView(props: {
     )
   }
 
+  /** Row name cell: the inline rename input while editing, else the plain name. */
+  const nameCell = (entry: FsEntry): ReactNode => {
+    if (renaming?.path !== entry.path) {
+      return <span className={css.explorerName}>{entry.name}</span>
+    }
+    return (
+      <input
+        ref={renameInputRef}
+        className={css.explorerNameInput}
+        value={renameValue}
+        aria-label={t('rename')}
+        onChange={(event) => { setRenameValue(event.target.value) }}
+        onClick={(event) => { event.stopPropagation() }}
+        onKeyDown={(event) => {
+          // Keep the row's own Enter/Space handler (toggle/open) from firing.
+          event.stopPropagation()
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            renameDoneRef.current = true
+            commitRename()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            renameDoneRef.current = true
+            setRenaming(null)
+          }
+        }}
+        onBlur={() => { if (!renameDoneRef.current) commitRename() }}
+      />
+    )
+  }
+
   const openRowMenu = (event: MouseEvent, path: string, name: string, isDir: boolean): void => {
     event.preventDefault()
     event.stopPropagation()
@@ -228,6 +267,41 @@ export function ExplorerView(props: {
       setBanner(`${t('deleteFailed')}：${error instanceof Error ? error.message : String(error)}`)
     }
   }, [sessionId, cwd, refresh])
+
+  /** Enter inline rename mode for a row (its name preselected in the input). */
+  const startRename = useCallback((path: string, name: string): void => {
+    renameDoneRef.current = false
+    setRenaming({ path })
+    setRenameValue(name)
+  }, [])
+
+  /** Commit the inline rename (Enter or blur). No-op when unchanged. */
+  const commitRename = useCallback((): void => {
+    const target = renaming
+    if (target === null) return
+    const value = renameValue.trim()
+    if (value === '' || value === baseName(target.path)) {
+      setRenaming(null)
+      return
+    }
+    setBanner(null)
+    // The row unmounts with the input; the done-ref keeps blur from double-firing.
+    api.fsRename({ sessionId, cwd }, target.path, value).then(() => {
+      refresh()
+    }).catch((error: unknown) => {
+      setBanner(`${t('renameFailed')}：${error instanceof Error ? error.message : String(error)}`)
+    }).finally(() => {
+      renameDoneRef.current = true
+      setRenaming(null)
+    })
+  }, [renaming, renameValue, sessionId, cwd, refresh])
+
+  // Focus and select the inline input when a rename starts.
+  useEffect(() => {
+    if (renaming === null) return
+    renameInputRef.current?.focus()
+    renameInputRef.current?.select()
+  }, [renaming])
 
   // Drag-to-upload: intercept file drags over the whole explorer (the
   // composer's document-level drop handlers would otherwise claim them for
@@ -317,7 +391,7 @@ export function ExplorerView(props: {
               onContextMenu={(event) => { openRowMenu(event, entry.path, entry.name, true) }}
             >
               {isOpen ? <IconFolderOpen16 size={14} /> : <IconFolderClose16 size={14} />}
-              <span className={css.explorerName}>{entry.name}</span>
+              {nameCell(entry)}
               {entry.isSymlink && <IconLinkOutline16 size={12} className={css.explorerSymlink} />}
               {rowActions(entry)}
             </div>
@@ -344,7 +418,7 @@ export function ExplorerView(props: {
           onContextMenu={(event) => { openRowMenu(event, entry.path, entry.name, false) }}
         >
           <IconCodeOutline16 size={14} />
-          <span className={css.explorerName}>{entry.name}</span>
+          {nameCell(entry)}
           {entry.isSymlink && <IconLinkOutline16 size={12} className={css.explorerSymlink} />}
           {rowActions(entry)}
         </div>
@@ -456,6 +530,7 @@ export function ExplorerView(props: {
           ...(rowMenu?.isDir === false
             ? [{ id: 'download', label: t('download'), icon: <IconDownloadOutline16 size={14} /> }]
             : []),
+          { id: 'rename', label: t('rename'), icon: <IconEditOutline16 size={14} /> },
           { id: 'delete', label: t('delete'), icon: <IconTrashOutline16 size={14} />, danger: true },
           { type: 'separator', id: 'sep' },
           { id: 'relative', label: t('copyRelative'), icon: <IconCopyOutline16 size={14} /> },
@@ -467,6 +542,10 @@ export function ExplorerView(props: {
           setRowMenu(null)
           if (id === 'download') {
             downloadFile(target.path)
+            return
+          }
+          if (id === 'rename') {
+            startRename(target.path, target.name)
             return
           }
           if (id === 'delete') {

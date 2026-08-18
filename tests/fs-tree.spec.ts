@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
-import { compareEntries, isWithin, parentOf, requireAbsolute, rootLabel } from '../src/fs-tree.ts'
+import { compareEntries, isWithin, parentOf, renameTarget, requireAbsolute, rootLabel } from '../src/fs-tree.ts'
 import { isWin32 } from './platform.ts'
 
 describe('fs-tree', () => {
@@ -94,5 +94,30 @@ describe('fs-tree', () => {
     expect(isWithin('\\\\server\\share\\proj', '\\\\server\\share\\proj\\src\\a.ts', 'win32')).toBe(true)
     expect(isWithin('\\\\server\\share\\proj', '\\\\server\\share\\proj2\\a.ts', 'win32')).toBe(false)
     expect(isWithin('\\\\server\\share\\proj', '\\\\other\\share\\a.ts', 'win32')).toBe(false)
+  })
+
+  describe('renameTarget', () => {
+    it('joins the new leaf name into the parent directory', () => {
+      expect(renameTarget('/work/proj/src/a.ts', 'b.ts')).toBe('/work/proj/src/b.ts')
+      expect(renameTarget('/work/proj/src/dir', 'renamed')).toBe('/work/proj/src/renamed')
+    })
+
+    it('strips trailing separators from the new name (editor pastes)', () => {
+      expect(renameTarget('/work/a.txt', 'b.txt/')).toBe('/work/b.txt')
+      expect(renameTarget('/work/a.txt', 'b.txt\\')).toBe('/work/b.txt')
+    })
+
+    it('rejects empty, dot, dotdot and separator-carrying names', () => {
+      // A trailing separator is stripped (see the strip test above), so only
+      // separators INSIDE the name are illegal.
+      for (const bad of ['', '.', '..', 'a/b', 'a\\b', '../x']) {
+        expect(() => renameTarget('/work/a.txt', bad)).toThrow()
+      }
+    })
+
+    it('keeps hidden names (dot-prefixed) as ordinary names', () => {
+      expect(renameTarget('/work/a.txt', '.env')).toBe('/work/.env')
+      expect(renameTarget('/work/.env', '.env.local')).toBe('/work/.env.local')
+    })
   })
 })

@@ -720,6 +720,26 @@
   text-overflow: ellipsis;
 }
 
+/* The inline rename input replacing the row name while editing: a slim
+   brand-outlined field that keeps the row's rhythm (same ink and typography). */
+.explorerNameInput {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-brand-primary);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  outline: none;
+}
+
+.explorerNameInput:focus {
+  border-color: var(--dsw-alias-brand-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 25%, transparent);
+}
+
 /* The hover-revealed @-reference button at the row's far right (and the
    transient "copied" label that replaces it after a copy). Hidden rows
    keep the name at full width; hovering or focusing the row reveals it. */

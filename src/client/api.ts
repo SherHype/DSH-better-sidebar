@@ -149,6 +149,10 @@ export const api = {
    *  directory. */
   fsDelete: (scope: SessionScope, path: string) =>
     call<{ ok: true; path: string }>('fs.delete', scopePayload(scope, { path, recursive: true })),
+  /** Rename a file or directory to a new leaf name inside its parent
+   *  directory (the host refuses to overwrite an existing target). */
+  fsRename: (scope: SessionScope, path: string, name: string) =>
+    call<{ ok: true; path: string }>('fs.rename', scopePayload(scope, { path, name })),
   gitStatus: (scope: SessionScope, signal?: AbortSignal) =>
     call<GitStatusResult>('git.status', scopePayload(scope, {}), signal),
   gitDiff: (scope: SessionScope, path: string | undefined, staged: boolean, signal?: AbortSignal) =>

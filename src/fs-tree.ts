@@ -132,6 +132,21 @@ export function requireAbsolute(path: string): string {
 }
 
 /**
+ * Compute the destination of an explorer rename: validate the new leaf name
+ * (non-empty, not '.', '..', and carrying no path separator — a rename must
+ * keep the item inside its current parent directory) and return the joined
+ * absolute target path.
+ * @throws {SidebarError} fs-error on an invalid name.
+ */
+export function renameTarget(path: string, name: string): string {
+  const leaf = name.replace(/[\\/]+$/, '')
+  if (leaf === '' || leaf === '.' || leaf === '..' || /[\\/]/.test(leaf)) {
+    throw new SidebarError('fs-error', `invalid file name "${name}"`, 400)
+  }
+  return join(dirname(path), leaf)
+}
+
+/**
  * Whether `target` lies under `base` (or equals it), tolerant of separator
  * style and — on Windows, where the filesystem is case-insensitive — of
  * letter case. The media route uses this instead of a raw `startsWith` so a

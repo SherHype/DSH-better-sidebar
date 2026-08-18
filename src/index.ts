@@ -28,7 +28,7 @@ import {
   type SidebarConfig,
   type SidebarPrefs,
 } from './config.ts'
-import { isWithin, parentOf, requireAbsolute, listDirectory, rootLabel } from './fs-tree.ts'
+import { isWithin, parentOf, requireAbsolute, renameTarget, listDirectory, rootLabel } from './fs-tree.ts'
 import { decodeHtmlUrl } from './html-route.ts'
 import { extractFrameAncestors } from './browser-probe.ts'
 import { isTrustedApiRequest, isLoopbackHostname } from './trust-fence.ts'
@@ -260,6 +260,30 @@ function buildApi(
         throw new SidebarError('fs-error', `cannot delete "${path}": ${error instanceof Error ? error.message : String(error)}`, 400)
       }
       return { ok: true, path }
+    },
+    'fs.rename': async (payload) => {
+      const { cwd } = cwdOf(payload)
+      const path = requireAbsolute(requireString(payload, 'path'))
+      // Never allow the session working directory itself to be renamed: the
+      // explorer is rooted there, so renaming it would strand the session.
+      if (path === cwd) {
+        throw new SidebarError('fs-error', 'cannot rename the session working directory', 403)
+      }
+      const target = renameTarget(path, requireString(payload, 'name'))
+      try {
+        // A rename that silently overwrites would lose data — refuse when the
+        // destination already exists (the client checks the tree first; this
+        // is the authoritative race-free guard).
+        const existing = await stat(target).catch(() => undefined)
+        if (existing !== undefined) {
+          throw new SidebarError('fs-error', `"${basename(target)}" already exists`, 409)
+        }
+        await rename(path, target)
+      } catch (error) {
+        if (error instanceof SidebarError) throw error
+        throw new SidebarError('fs-error', `cannot rename "${path}": ${error instanceof Error ? error.message : String(error)}`, 400)
+      }
+      return { ok: true, path: target }
     },
     'git.status': async (payload) => {
       const { cwd } = cwdOf(payload)
